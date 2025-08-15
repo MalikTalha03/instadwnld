@@ -22,45 +22,51 @@ DEFAULT_UA = (
     "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
 )
 
-def _yt_base_opts():
-    ua = os.getenv("YTDLP_UA", DEFAULT_UA)
-    opts = {
+def _yt_base_opts() -> Dict[str, Any]:
+    """
+    Build yt-dlp options that work on servers (Render) with optional cookies.
+    Priority:
+      1) IG_COOKIE_HEADER   -> raw Cookie: "k=v; k2=v2; ..."
+      2) IG_COOKIES_TXT     -> full Netscape cookies.txt content (env, multiline OK)
+      3) IG_COOKIE_FILE_PATH-> path to cookies.txt mounted/checked into the container
+    """
+    opts: Dict[str, Any] = {
         "quiet": True,
         "noplaylist": True,
-        "format": "bv*+ba/b[ext=mp4]/b",
-        "user_agent": ua,
-        "http_headers": {
-            "User-Agent": ua,
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            "Accept-Language": "en-US,en;q=0.9",
-            "Referer": "https://www.instagram.com/",
-            "Origin": "https://www.instagram.com",
-        },
-        "retries": 2,
+        "format": "bv*+ba/b[ext=mp4]/b",   # prefer single-file MP4
+        "user_agent": os.getenv("YTDLP_UA", DEFAULT_UA),
     }
 
-    # 1) Secret file from Render
-    cookiefile = os.getenv("IG_COOKIE_FILE_PATH", "")
-    if cookiefile and os.path.exists(cookiefile):
-        opts["cookiefile"] = cookiefile
-        return opts
-
-    # 2) Raw cookies.txt content (fallback)
-    cookies_txt = os.getenv("IG_COOKIES_TXT", "")
-    if cookies_txt:
-        tmp = "/tmp/ig_cookies.txt"
-        with open(tmp, "w") as f:
-            f.write(cookies_txt)
-        opts["cookiefile"] = tmp
-        return opts
-
-    # 3) LAST resort: Cookie header (not recommended)
     cookie_header = os.getenv("IG_COOKIE_HEADER", "").strip()
+    cookies_txt = os.getenv("IG_COOKIES_TXT", "")
+    cookies_path_env = os.getenv("IG_COOKIE_FILE_PATH", "")
+
+    # 1) Raw Cookie header (easiest)
     if cookie_header:
-        opts["http_headers"]["Cookie"] = cookie_header
+        opts["http_headers"] = {
+            "User-Agent": opts["user_agent"],
+            "Cookie": cookie_header,
+            "Referer": "https://www.instagram.com/",
+            "Origin": "https://www.instagram.com",
+        }
+        return opts
+
+    # 2) Cookies.txt content from env (Netscape format)
+    if cookies_txt:
+        tmp_path = "/tmp/ig_cookies.txt"
+        try:
+            with open(tmp_path, "w") as f:
+                f.write(cookies_txt)
+            opts["cookiefile"] = tmp_path
+            return opts
+        except Exception:
+            pass  # fall through
+
+    # 3) Cookies file path provided
+    if cookies_path_env and os.path.exists(cookies_path_env):
+        opts["cookiefile"] = cookies_path_env
 
     return opts
-
 
 
 # Accept any Instagram URL (post/reel/story highlight URLs vary)
