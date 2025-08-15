@@ -14,6 +14,61 @@ import uuid
 from django.conf import settings
 from django.views.decorators.csrf import csrf_exempt
 
+import os
+from typing import Dict, Any
+
+DEFAULT_UA = (
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+)
+
+def _yt_base_opts() -> Dict[str, Any]:
+    """
+    Build yt-dlp options that work on servers (Render) with optional cookies.
+    Priority:
+      1) IG_COOKIE_HEADER   -> raw Cookie: "k=v; k2=v2; ..."
+      2) IG_COOKIES_TXT     -> full Netscape cookies.txt content (env, multiline OK)
+      3) IG_COOKIE_FILE_PATH-> path to cookies.txt mounted/checked into the container
+    """
+    opts: Dict[str, Any] = {
+        "quiet": True,
+        "noplaylist": True,
+        "format": "bv*+ba/b[ext=mp4]/b",   # prefer single-file MP4
+        "user_agent": os.getenv("YTDLP_UA", DEFAULT_UA),
+    }
+
+    cookie_header = os.getenv("IG_COOKIE_HEADER", "").strip()
+    cookies_txt = os.getenv("IG_COOKIES_TXT", "")
+    cookies_path_env = os.getenv("IG_COOKIE_FILE_PATH", "")
+
+    # 1) Raw Cookie header (easiest)
+    if cookie_header:
+        opts["http_headers"] = {
+            "User-Agent": opts["user_agent"],
+            "Cookie": cookie_header,
+            "Referer": "https://www.instagram.com/",
+            "Origin": "https://www.instagram.com",
+        }
+        return opts
+
+    # 2) Cookies.txt content from env (Netscape format)
+    if cookies_txt:
+        tmp_path = "/tmp/ig_cookies.txt"
+        try:
+            with open(tmp_path, "w") as f:
+                f.write(cookies_txt)
+            opts["cookiefile"] = tmp_path
+            return opts
+        except Exception:
+            pass  # fall through
+
+    # 3) Cookies file path provided
+    if cookies_path_env and os.path.exists(cookies_path_env):
+        opts["cookiefile"] = cookies_path_env
+
+    return opts
+
+
 # Accept any Instagram URL (post/reel/story highlight URLs vary)
 INSTAGRAM_REGEX = re.compile(r"^https?://(www\.)?instagram\.com/.*", re.IGNORECASE)
 
@@ -69,15 +124,8 @@ def resolve_instagram(request):
     if not ig_url or not INSTAGRAM_REGEX.match(ig_url):
         return HttpResponseBadRequest("Provide a valid Instagram URL")
 
-    ydl_opts = {
-        "quiet": True,
-        "noplaylist": True,
-        # Prefer a single-file mp4; otherwise, yt-dlp may give HLS/DASH
-        "format": "bv*+ba/b[ext=mp4]/b",
-        # --- If you need cookies for private/age-gated posts, uncomment one:
-        # "cookiesfrombrowser": ("chrome",),  # or ("firefox",)
-        # "cookiefile": "/path/to/cookies.txt",
-    }
+    ydl_opts = _yt_base_opts()
+
 
     try:
         with YoutubeDL(ydl_opts) as ydl:
@@ -117,13 +165,8 @@ def redirect_instagram(request):
     if not ig_url or not INSTAGRAM_REGEX.match(ig_url):
         return HttpResponseBadRequest("Provide a valid Instagram URL")
 
-    ydl_opts = {
-        "quiet": True,
-        "noplaylist": True,
-        "format": "bv*+ba/b[ext=mp4]/b",
-        # "cookiesfrombrowser": ("chrome",),  # if needed
-        # "cookiefile": "/path/to/cookies.txt",
-    }
+    ydl_opts = _yt_base_opts()
+
 
     try:
         with YoutubeDL(ydl_opts) as ydl:
@@ -166,13 +209,12 @@ def download_instagram(request):
     outtmpl = os.path.join(out_dir, f"{unique}.%(ext)s")
 
     # yt-dlp options
-    ydl_opts = {
+    ydl_opts = _yt_base_opts()
+    ydl_opts.update({
         "outtmpl": outtmpl,
-        "format": "mp4/best",         # try mp4 first
-        "noplaylist": True,
-        "quiet": True,
-        "merge_output_format": "mp4", # ensure mp4 container when needed
-    }
+        "merge_output_format": "mp4",
+    })
+
 
     try:
         with YoutubeDL(ydl_opts) as ydl:
