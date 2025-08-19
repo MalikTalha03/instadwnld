@@ -1,0 +1,22 @@
+# Dockerfile
+FROM python:3.12-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1
+
+WORKDIR /app
+
+# (Optional but helpful) system libs for ssl/certs & unzip
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates curl \
+ && rm -rf /var/lib/apt/lists/*
+
+COPY requirements.txt .
+RUN python -m pip install --upgrade pip && pip install -r requirements.txt gunicorn
+
+COPY . .
+
+# App Platform injects PORT. Bind Gunicorn to it.
+ENV DJANGO_SETTINGS_MODULE=instadl.settings
+CMD gunicorn instadl.wsgi:application --bind 0.0.0.0:${PORT:-8000} --workers 3 --timeout 60
