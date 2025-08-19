@@ -21,14 +21,9 @@ DEFAULT_UA = (
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
 )
-
 def _yt_base_opts() -> Dict[str, Any]:
     """
-    Build yt-dlp options that work on servers (Render) with optional cookies.
-    Priority:
-      1) IG_COOKIE_HEADER   -> raw Cookie: "k=v; k2=v2; ..."
-      2) IG_COOKIES_TXT     -> full Netscape cookies.txt content (env, multiline OK)
-      3) IG_COOKIE_FILE_PATH-> path to cookies.txt mounted/checked into the container
+    Build yt-dlp options that work on servers with cookies.
     """
     opts: Dict[str, Any] = {
         "quiet": True,
@@ -38,10 +33,23 @@ def _yt_base_opts() -> Dict[str, Any]:
     }
 
     cookie_header = os.getenv("IG_COOKIE_HEADER", "").strip()
-    cookies_txt = os.getenv("IG_COOKIES_TXT", "")
-    cookies_path_env = os.getenv("IG_COOKIE_FILE_PATH", "")
 
-    # 1) Raw Cookie header (easiest)
+    # 🔐 fallback: hardcoded cookie string
+    if not cookie_header:
+        cookie_header = (
+            'csrftoken=LmbmoQevmYNc6mcma_7Czh; '
+            'datr=mXifaEzs4ZkHjp6Jnbgfo29f; '
+            'ig_did=C1361653-6529-4B2B-8095-3EFF5882998D; '
+            'wd=1867x625; '
+            'mid=aJ94mgAEAAE-YtbkisGtqQwhZw2f; '
+            'ig_nrcb=1; '
+            'sessionid=54174011413%3A94NAzjEixQVCCw%3A1%3AAYc0qFV6aShr7jbE41M7Q5eMehILfLuqlflg4FevzA; '
+            'ds_user_id=54174011413; '
+            'ps_l=1; '
+            'ps_n=1; '
+            'rur="RVA\\05454174011413\\0541786997274:01fead3c94a99887a9734fd004faef27643e1caa563ead1d29996591457100c8a0d03ea6"'
+        )
+
     if cookie_header:
         opts["http_headers"] = {
             "User-Agent": opts["user_agent"],
@@ -49,24 +57,9 @@ def _yt_base_opts() -> Dict[str, Any]:
             "Referer": "https://www.instagram.com/",
             "Origin": "https://www.instagram.com",
         }
-        return opts
-
-    # 2) Cookies.txt content from env (Netscape format)
-    if cookies_txt:
-        tmp_path = "/tmp/ig_cookies.txt"
-        try:
-            with open(tmp_path, "w") as f:
-                f.write(cookies_txt)
-            opts["cookiefile"] = tmp_path
-            return opts
-        except Exception:
-            pass  # fall through
-
-    # 3) Cookies file path provided
-    if cookies_path_env and os.path.exists(cookies_path_env):
-        opts["cookiefile"] = cookies_path_env
 
     return opts
+
 
 
 # Accept any Instagram URL (post/reel/story highlight URLs vary)
@@ -181,58 +174,3 @@ def redirect_instagram(request):
     except Exception as e:
         return HttpResponseBadRequest(str(e))
 
-
-
-
-@csrf_exempt  # for a simple API; in prod, use proper CSRF/auth
-def download_instagram(request):
-    if request.method != "POST":
-        return HttpResponseNotAllowed(["POST"], "Use POST with JSON: {\"url\": \"...\"}")
-
-    # Parse JSON
-    try:
-        data = json.loads(request.body.decode("utf-8"))
-        url = (data.get("url") or "").strip()
-    except Exception:
-        return HttpResponseBadRequest("Invalid JSON payload")
-
-    # Validate URL
-    if not url or not INSTAGRAM_REGEX.match(url):
-        return HttpResponseBadRequest("Provide a valid Instagram URL")
-
-    # Prepare output folder
-    out_dir = os.path.join(settings.MEDIA_ROOT, "videos")
-    os.makedirs(out_dir, exist_ok=True)
-
-    # Unique filename template for yt-dlp
-    unique = str(uuid.uuid4())
-    outtmpl = os.path.join(out_dir, f"{unique}.%(ext)s")
-
-    # yt-dlp options
-    ydl_opts = _yt_base_opts()
-    ydl_opts.update({
-        "outtmpl": outtmpl,
-        "merge_output_format": "mp4",
-    })
-
-
-    try:
-        with YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=True)
-            # Get the actual downloaded file path
-            downloaded = ydl.prepare_filename(info)  # includes extension decided by yt-dlp
-
-        # Build a public URL (dev: Django serves media; prod: serve via CDN/object storage)
-        rel_path = os.path.relpath(downloaded, settings.MEDIA_ROOT).replace("\\", "/")
-        file_url = settings.MEDIA_URL + rel_path
-        absolute_url = request.build_absolute_uri(file_url)
-
-        return JsonResponse({
-            "status": "ok",
-            "download_url": absolute_url,
-            "filename": os.path.basename(downloaded),
-        })
-
-    except Exception as e:
-        # Hide internals but keep message helpful
-        return JsonResponse({"status": "error", "message": str(e)}, status=400)
