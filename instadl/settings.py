@@ -4,8 +4,10 @@ import os
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 SECRET_KEY = os.getenv("DJANGO_SECRET_KEY", "dev-only-secret-change-me")
-DEBUG = True  # set False in prod
+DEBUG = False  # set False in prod
 ALLOWED_HOSTS = ["*"]  # restrict in prod
+SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+
 
 INSTALLED_APPS = [
     "django.contrib.admin",
